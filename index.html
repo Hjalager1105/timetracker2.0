@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Team time tracker</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Team time tracker</h1>
+      <nav>
+        <button id="tab-clock" class="tab active">Clock in / out</button>
+        <button id="tab-admin" class="tab">Admin</button>
+      </nav>
+    </header>
+
+    <main>
+      <section id="view-clock"></section>
+      <section id="view-admin" class="hidden"></section>
+    </main>
+
+    <p id="status" class="status"></p>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
