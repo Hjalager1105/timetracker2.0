@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 const DATA_FILE = path.join(__dirname, 'data.json');
 
 // --- tiny JSON "database" -------------------------------------------------
@@ -109,3 +109,4 @@ app.delete('/api/entries/:id', (req, res) => {
 app.listen(PORT, () => {
   console.log(`Time tracker running at http://localhost:${PORT}`);
 });
+
