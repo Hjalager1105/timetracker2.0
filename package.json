@@ -1,0 +1,18 @@
+{
+  "name": "team-time-tracker",
+  "version": "1.0.0",
+  "description": "Simple employee clock in/out and timesheet web app",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "migrate-from-json": "node migrate.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "pg": "^8.11.5"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
