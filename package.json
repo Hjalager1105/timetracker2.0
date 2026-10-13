@@ -1,18 +1,10 @@
 {
-  "name": "team-time-tracker",
+  "name": "gastrotid-ordresamler",
   "version": "1.0.0",
-  "description": "Simple employee clock in/out and timesheet web app",
+  "private": true,
+  "description": "Samler bestillinger fra Wopla, Frokostfirmaet og OG til én CSV til Piranya",
   "main": "server.js",
-  "type": "commonjs",
-  "scripts": {
-    "start": "node server.js",
-    "migrate-from-json": "node migrate.js"
-  },
-  "dependencies": {
-    "express": "^4.19.2",
-    "pg": "^8.11.5"
-  },
-  "engines": {
-    "node": ">=18"
-  }
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=18" },
+  "dependencies": { "express": "^4.21.2", "pg": "^8.13.1" }
 }

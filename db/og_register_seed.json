@@ -1,0 +1,292 @@
+[
+ {
+  "type": "Kunde",
+  "id": 910001,
+  "navn": "21st.BIO A/S"
+ },
+ {
+  "type": "Kunde",
+  "id": 910002,
+  "navn": "Capacit A/S"
+ },
+ {
+  "type": "Kunde",
+  "id": 910003,
+  "navn": "Copydan Verdens TV"
+ },
+ {
+  "type": "Kunde",
+  "id": 910004,
+  "navn": "Donatzky & Partnere P/S"
+ },
+ {
+  "type": "Kunde",
+  "id": 910005,
+  "navn": "Festina Finance A/S"
+ },
+ {
+  "type": "Kunde",
+  "id": 910006,
+  "navn": "GALST ADVOKATAKTIESELSKAB"
+ },
+ {
+  "type": "Kunde",
+  "id": 910007,
+  "navn": "HelloFresh"
+ },
+ {
+  "type": "Kunde",
+  "id": 910008,
+  "navn": "NIO Partners"
+ },
+ {
+  "type": "Kunde",
+  "id": 910009,
+  "navn": "North Consulting ApS"
+ },
+ {
+  "type": "Kunde",
+  "id": 910010,
+  "navn": "Office Club - Harsdoffs Hus Aurora Lounge"
+ },
+ {
+  "type": "Kunde",
+  "id": 910011,
+  "navn": "Office Club - Kalvebod Bastion"
+ },
+ {
+  "type": "Kunde",
+  "id": 910012,
+  "navn": "Office Club - Zieglers Gaard"
+ },
+ {
+  "type": "Kunde",
+  "id": 910013,
+  "navn": "Rud Pedersen A/S"
+ },
+ {
+  "type": "Kunde",
+  "id": 910014,
+  "navn": "SIMON-KUCHER & PARTNERS STRATEGY & MARKETING CONSULTANTS ApS"
+ },
+ {
+  "type": "Kunde",
+  "id": 910015,
+  "navn": "Subsets"
+ },
+ {
+  "type": "Kunde",
+  "id": 910016,
+  "navn": "Tandlægeforeningen"
+ },
+ {
+  "type": "Kunde",
+  "id": 910017,
+  "navn": "TICRA FOND"
+ },
+ {
+  "type": "Produkt",
+  "id": 920001,
+  "navn": "Ekstra varm ret"
+ },
+ {
+  "type": "Produkt",
+  "id": 920002,
+  "navn": "Frokost med fisk"
+ },
+ {
+  "type": "Produkt",
+  "id": 920003,
+  "navn": "Frokost uden gris/halal"
+ },
+ {
+  "type": "Produkt",
+  "id": 920004,
+  "navn": "Frokost uden svinekød"
+ },
+ {
+  "type": "Produkt",
+  "id": 920005,
+  "navn": "Glutenfri"
+ },
+ {
+  "type": "Produkt",
+  "id": 920006,
+  "navn": "Glutenfri & Laktosefri"
+ },
+ {
+  "type": "Produkt",
+  "id": 920007,
+  "navn": "Glutenfri uden svinekød"
+ },
+ {
+  "type": "Produkt",
+  "id": 920008,
+  "navn": "Klassisk Laktosefri"
+ },
+ {
+  "type": "Produkt",
+  "id": 920009,
+  "navn": "Klassisk frokost"
+ },
+ {
+  "type": "Produkt",
+  "id": 920010,
+  "navn": "Klassisk uden oksekød"
+ },
+ {
+  "type": "Produkt",
+  "id": 920011,
+  "navn": "Minus nødder"
+ },
+ {
+  "type": "Produkt",
+  "id": 920012,
+  "navn": "Salat Bowl - Kylling"
+ },
+ {
+  "type": "Produkt",
+  "id": 920013,
+  "navn": "Salatbowl"
+ },
+ {
+  "type": "Produkt",
+  "id": 920014,
+  "navn": "Salatbowl - Glutenfri"
+ },
+ {
+  "type": "Produkt",
+  "id": 920015,
+  "navn": "Salatbowl - Gris"
+ },
+ {
+  "type": "Produkt",
+  "id": 920016,
+  "navn": "Salatbowl - Kylling"
+ },
+ {
+  "type": "Produkt",
+  "id": 920017,
+  "navn": "Salatbowl - Laktosefri"
+ },
+ {
+  "type": "Produkt",
+  "id": 920018,
+  "navn": "Salatbowl - Okse"
+ },
+ {
+  "type": "Produkt",
+  "id": 920019,
+  "navn": "Salatbowl - Tun"
+ },
+ {
+  "type": "Produkt",
+  "id": 920020,
+  "navn": "Sandwich - Gris"
+ },
+ {
+  "type": "Produkt",
+  "id": 920021,
+  "navn": "Sandwich - Kylling"
+ },
+ {
+  "type": "Produkt",
+  "id": 920022,
+  "navn": "Sandwich - Okse"
+ },
+ {
+  "type": "Produkt",
+  "id": 920023,
+  "navn": "Sandwich - Tun"
+ },
+ {
+  "type": "Produkt",
+  "id": 920024,
+  "navn": "Sandwich - Vegetar"
+ },
+ {
+  "type": "Produkt",
+  "id": 920025,
+  "navn": "Vegansk Frokost"
+ },
+ {
+  "type": "Produkt",
+  "id": 920026,
+  "navn": "Vegansk Laktosefri"
+ },
+ {
+  "type": "Produkt",
+  "id": 920027,
+  "navn": "Vegetarisk Frokost"
+ },
+ {
+  "type": "Produkt",
+  "id": 920028,
+  "navn": "Extra varm ret"
+ },
+ {
+  "type": "Produkt",
+  "id": 920029,
+  "navn": "Foccacia"
+ },
+ {
+  "type": "Produkt",
+  "id": 920030,
+  "navn": "Kuvertsmør"
+ },
+ {
+  "type": "Produkt",
+  "id": 920031,
+  "navn": "Kærgården Øko"
+ },
+ {
+  "type": "Produkt",
+  "id": 920032,
+  "navn": "Letmælk Øko - 1L"
+ },
+ {
+  "type": "Produkt",
+  "id": 920033,
+  "navn": "Minimælk Øko - 1L"
+ },
+ {
+  "type": "Produkt",
+  "id": 920034,
+  "navn": "Mødeplatte"
+ },
+ {
+  "type": "Produkt",
+  "id": 920035,
+  "navn": "Oatly Oat Barista Havremælk"
+ },
+ {
+  "type": "Produkt",
+  "id": 920036,
+  "navn": "Pesto med kerner & parmesan"
+ },
+ {
+  "type": "Produkt",
+  "id": 920037,
+  "navn": "Rugbrød"
+ },
+ {
+  "type": "Produkt",
+  "id": 920038,
+  "navn": "Salat bowl"
+ },
+ {
+  "type": "Produkt",
+  "id": 920039,
+  "navn": "Salat bowl u. løg og hvidløg"
+ },
+ {
+  "type": "Produkt",
+  "id": 920040,
+  "navn": "Sandwich"
+ },
+ {
+  "type": "Produkt",
+  "id": 920041,
+  "navn": "Smørrebrød 1 stk."
+ }
+]

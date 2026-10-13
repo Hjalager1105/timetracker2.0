@@ -1,369 +1,190 @@
-const state = { employees: [], entries: [] };
-let adminPassword = null; // held in memory only, never persisted
-const pendingAction = {}; // employeeId -> 'in' | 'out', while password entry is open
+'use strict';
+const $ = s => document.querySelector(s);
+const KILDE = { wopla: 'Wopla', frokostfirmaet: 'Frokostfirmaet', og: 'OG' };
+let files = [];        // {name, text}
+let analyse = null;    // svar fra /api/analyse
 
-const viewClock = document.getElementById('view-clock');
-const viewAdmin = document.getElementById('view-admin');
-const tabClock = document.getElementById('tab-clock');
-const tabAdmin = document.getElementById('tab-admin');
-const statusEl = document.getElementById('status');
-
-tabClock.addEventListener('click', () => switchTab('clock'));
-tabAdmin.addEventListener('click', () => switchTab('admin'));
-
-function switchTab(tab) {
-  tabClock.classList.toggle('active', tab === 'clock');
-  tabAdmin.classList.toggle('active', tab === 'admin');
-  viewClock.classList.toggle('hidden', tab !== 'clock');
-  viewAdmin.classList.toggle('hidden', tab !== 'admin');
-  if (tab === 'admin') renderAdmin();
-}
-
-function showError(msg) {
-  statusEl.textContent = msg || '';
-  if (msg) setTimeout(() => { if (statusEl.textContent === msg) statusEl.textContent = ''; }, 4000);
-}
-
-async function api(path, options, extraHeaders) {
-  const res = await fetch('/api' + path, {
-    headers: { 'Content-Type': 'application/json', ...(extraHeaders || {}) },
-    ...options,
+async function api(url, opts = {}) {
+  const res = await fetch(url, {
+    method: opts.method || (opts.body ? 'POST' : 'GET'),
+    headers: opts.body ? { 'Content-Type': 'application/json' } : {},
+    body: opts.body ? JSON.stringify(opts.body) : undefined
   });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error || 'Request failed');
-  return body;
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && url !== '/api/login') { showLogin(); throw new Error(data.error || 'Log ind igen.'); }
+  if (!res.ok) throw new Error(data.error || 'Fejl ' + res.status);
+  return data;
+}
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// ---------- Login / navigation ----------
+function showLogin() {
+  $('#login').hidden = false; $('#nav').hidden = true;
+  document.querySelectorAll('.view').forEach(v => v.hidden = true);
+}
+function showView(name) {
+  $('#login').hidden = true; $('#nav').hidden = false;
+  document.querySelectorAll('.view').forEach(v => v.hidden = v.id !== name);
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === name));
+  if (name === 'register') loadRegister();
+  if (name === 'indstillinger') loadSettings();
+}
+document.querySelectorAll('.tab').forEach(t => t.onclick = () => showView(t.dataset.view));
+$('#loginForm').onsubmit = async e => {
+  e.preventDefault(); $('#loginErr').textContent = '';
+  try { await api('/api/login', { body: { password: $('#pw').value } }); $('#pw').value = ''; showView('samling'); }
+  catch (err) { $('#loginErr').textContent = err.message; }
+};
+$('#logout').onclick = async () => { await api('/api/logout', { body: {} }).catch(() => {}); showLogin(); };
+
+// ---------- Filer ----------
+function readFile(file) {
+  const read = enc => new Promise((ok, fail) => {
+    const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = fail; r.readAsText(file, enc);
+  });
+  // Filer gemt fra Excel kan være i Windows-1252 i stedet for UTF-8
+  return read('utf-8').then(t => t.includes('�') ? read('windows-1252') : t);
 }
 
-function adminApi(path, options) {
-  return api(path, options, { 'x-admin-password': adminPassword });
-}
-
-function formatTime(ts) {
-  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
-
-function formatDate(ts) {
-  return new Date(ts).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
-}
-
-function formatDuration(ms) {
-  if (ms < 0) ms = 0;
-  const totalMin = Math.floor(ms / 60000);
-  return `${Math.floor(totalMin / 60)}h ${totalMin % 60}m`;
-}
-
-function initials(name) {
-  return name.trim().slice(0, 2).toUpperCase();
-}
-
-function activeEntryFor(empId) {
-  return state.entries.find(e => e.employeeId === empId && !e.clockOut);
-}
-
-async function refresh() {
-  const data = await api('/state');
-  state.employees = data.employees;
-  state.entries = data.entries;
-  renderClock();
-  if (!viewAdmin.classList.contains('hidden')) renderAdmin();
-}
-
-// --- Clock in/out view ------------------------------------------------
-
-function renderClock() {
-  if (state.employees.length === 0) {
-    viewClock.innerHTML = `<p class="empty-state">No employees yet. Ask an admin to add your team from the Admin tab.</p>`;
-    return;
+async function addFiles(list) {
+  for (const f of list) {
+    const text = await readFile(f);
+    files = files.filter(x => x.name !== f.name);
+    files.push({ name: f.name, text });
   }
-  viewClock.innerHTML = `<div class="card-grid">${state.employees.map(emp => {
-    const active = activeEntryFor(emp.id);
-    const pending = pendingAction[emp.id];
-    return `
-      <div class="card">
-        <div class="employee-header">
-          <div class="avatar">${initials(emp.name)}</div>
-          <div>
-            <p class="emp-name">${escapeHtml(emp.name)}</p>
-            <p class="emp-status ${active ? 'active' : 'inactive'}">
-              ${active ? `Clocked in at ${formatTime(active.clockIn)}` : 'Not clocked in'}
-            </p>
-          </div>
-        </div>
-        ${pending ? `
-          <form class="pw-form" data-id="${emp.id}" data-action="${pending}">
-            <input type="password" placeholder="Your password" autocomplete="off" autofocus />
-            <div class="pw-form-buttons">
-              <button type="submit" class="action ${pending === 'out' ? 'out' : 'in'}">
-                Confirm ${pending === 'out' ? 'clock out' : 'clock in'}
-              </button>
-              <button type="button" class="pw-cancel" data-id="${emp.id}">Cancel</button>
-            </div>
-          </form>
-        ` : `
-          <button class="action ${active ? 'out' : 'in'}" data-id="${emp.id}" data-action="${active ? 'out' : 'in'}">
-            ${active ? 'Clock out' : 'Clock in'}
-          </button>
-        `}
-      </div>
-    `;
-  }).join('')}</div>`;
-
-  viewClock.querySelectorAll('button.action[data-id]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      pendingAction[btn.dataset.id] = btn.dataset.action;
-      renderClock();
-    });
-  });
-
-  viewClock.querySelectorAll('.pw-cancel').forEach(btn => {
-    btn.addEventListener('click', () => {
-      delete pendingAction[btn.dataset.id];
-      renderClock();
-    });
-  });
-
-  viewClock.querySelectorAll('.pw-form').forEach(form => {
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const id = form.dataset.id;
-      const action = form.dataset.action;
-      const password = form.querySelector('input').value;
-      try {
-        await api(`/entries/clock-${action}`, {
-          method: 'POST',
-          body: JSON.stringify({ employeeId: id, password }),
-        });
-        delete pendingAction[id];
-        await refresh();
-      } catch (err) {
-        showError(err.message);
-      }
-    });
-  });
+  await runAnalyse();
 }
 
-// --- Admin view ---------------------------------------------------------
+const drop = $('#drop');
+$('#fileInput').onchange = e => { addFiles([...e.target.files]); e.target.value = ''; };
+['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', e => addFiles([...e.dataTransfer.files]));
 
-function renderAdmin() {
-  if (!adminPassword) {
-    viewAdmin.innerHTML = `
-      <div class="card" style="max-width: 320px;">
-        <h2 style="margin-bottom: 12px;">Admin sign-in</h2>
-        <form id="admin-login-form">
-          <input type="password" id="admin-password-input" placeholder="Admin password" autocomplete="off" style="width: 100%; margin-bottom: 10px;" />
-          <button type="submit" class="action in" style="width: 100%;">Sign in</button>
-        </form>
-      </div>
-    `;
-    document.getElementById('admin-login-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const value = document.getElementById('admin-password-input').value;
-      try {
-        await api('/admin/verify', { method: 'POST', body: JSON.stringify({ password: value }) });
-        adminPassword = value;
-        renderAdmin();
-      } catch (err) {
-        showError(err.message);
-      }
-    });
-    return;
-  }
-
-  const totals = {};
-  for (const emp of state.employees) totals[emp.id] = 0;
-  for (const e of state.entries) {
-    const end = e.clockOut || Date.now();
-    totals[e.employeeId] = (totals[e.employeeId] || 0) + (end - e.clockIn);
-  }
-
-  const sortedEntries = [...state.entries].sort((a, b) => b.clockIn - a.clockIn);
-
-  viewAdmin.innerHTML = `
-    <div class="add-row">
-      <input id="new-emp-name" type="text" placeholder="New employee name" />
-      <input id="new-emp-password" type="password" placeholder="Set their password" autocomplete="off" />
-      <button id="add-emp-btn">Add</button>
-    </div>
-    <div class="totals-grid">
-      ${state.employees.map(emp => `
-        <div class="total-card">
-          <button class="remove-btn" data-id="${emp.id}" aria-label="Remove ${escapeHtml(emp.name)}">&times;</button>
-          <p class="name">${escapeHtml(emp.name)}</p>
-          <p class="hours">${formatDuration(totals[emp.id] || 0)}</p>
-          <p class="label">total logged</p>
-        </div>
-      `).join('')}
-    </div>
-
-    <h2>Statistics</h2>
-    <div class="stats-panel">
-      <div class="stats-controls">
-        <label>From <input type="date" id="stats-start" /></label>
-        <label>To <input type="date" id="stats-end" /></label>
-        <button id="stats-run-btn">Show</button>
-        <div class="stats-presets">
-          <button type="button" class="preset-btn" data-preset="7">Last 7 days</button>
-          <button type="button" class="preset-btn" data-preset="30">Last 30 days</button>
-          <button type="button" class="preset-btn" data-preset="month">This month</button>
-        </div>
-      </div>
-      <div id="stats-results"></div>
-    </div>
-
-    <h2>Timesheet</h2>
-    ${sortedEntries.length === 0 ? '<p class="empty-state">No entries yet.</p>' : `
-      <table class="timesheet">
-        <thead>
-          <tr><th>Employee</th><th>Date</th><th>Clock in</th><th>Clock out</th><th>Duration</th><th></th></tr>
-        </thead>
-        <tbody>
-          ${sortedEntries.map(e => {
-            const emp = state.employees.find(x => x.id === e.employeeId);
-            const end = e.clockOut || Date.now();
-            return `
-              <tr>
-                <td>${emp ? escapeHtml(emp.name) : 'Removed employee'}</td>
-                <td>${formatDate(e.clockIn)}</td>
-                <td>${formatTime(e.clockIn)}</td>
-                <td>${e.clockOut ? formatTime(e.clockOut) : 'active'}</td>
-                <td>${formatDuration(end - e.clockIn)}</td>
-                <td><button class="del-btn" data-id="${e.id}">Delete</button></td>
-              </tr>
-            `;
-          }).join('')}
-        </tbody>
-      </table>
-    `}
-  `;
-
-  document.getElementById('add-emp-btn').addEventListener('click', addEmployee);
-  document.getElementById('new-emp-password').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') addEmployee();
-  });
-
-  setupStatsPanel();
-
-  viewAdmin.querySelectorAll('.remove-btn').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      try {
-        await adminApi(`/employees/${btn.dataset.id}`, { method: 'DELETE' });
-        await refresh();
-      } catch (e) {
-        showError(e.message);
-      }
-    });
-  });
-
-  viewAdmin.querySelectorAll('.del-btn').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      try {
-        await adminApi(`/entries/${btn.dataset.id}`, { method: 'DELETE' });
-        await refresh();
-      } catch (e) {
-        showError(e.message);
-      }
-    });
-  });
+function detectLocal(text) {
+  const h = text.replace(/^﻿/, '').split(/\r?\n/)[0].split(';').map(s => s.trim());
+  if (h[0] === 'Dato' && h[1] === 'CaterId') return 'wopla';
+  if (h.includes('KøkkenID') && h.includes('Mængde')) return 'frokostfirmaet';
+  if (h[0] === 'Customer' && h[2] === 'Route') return 'og';
+  return null;
 }
 
-// --- Statistics panel ----------------------------------------------------
-
-function dateInputValue(date) {
-  return date.toISOString().slice(0, 10); // YYYY-MM-DD
+function renderFiles() {
+  $('#fileList').innerHTML = files.map((f, i) => {
+    const t = detectLocal(f.text);
+    const linjer = analyse && t && analyse.filer[t] ? ` · ${analyse.filer[t].linjer} linjer` : '';
+    return `<li><span>${esc(f.name)}<span class="muted small">${linjer}</span></span>
+      <span>${t ? `<span class="tag">${KILDE[t]}</span>` : '<span class="tag bad">Ukendt format</span>'}
+      <button title="Fjern" data-i="${i}">×</button></span></li>`;
+  }).join('');
+  $('#fileList').querySelectorAll('button').forEach(b => b.onclick = () => { files.splice(+b.dataset.i, 1); runAnalyse(); });
 }
 
-function setupStatsPanel() {
-  const startInput = document.getElementById('stats-start');
-  const endInput = document.getElementById('stats-end');
-  const runBtn = document.getElementById('stats-run-btn');
-  const resultsEl = document.getElementById('stats-results');
+// ---------- Analyse ----------
+const toIso = d => { const m = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(d || ''); return m ? `${m[3]}-${m[2]}-${m[1]}` : ''; };
+const fromIso = d => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d || ''); return m ? `${m[3]}.${m[2]}.${m[1]}` : ''; };
 
-  // Default to the last 7 days on first load of this view.
-  const today = new Date();
-  const weekAgo = new Date();
-  weekAgo.setDate(weekAgo.getDate() - 6);
-  startInput.value = dateInputValue(weekAgo);
-  endInput.value = dateInputValue(today);
-
-  runBtn.addEventListener('click', () => runStats(startInput.value, endInput.value, resultsEl));
-
-  viewAdmin.querySelectorAll('.preset-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const preset = btn.dataset.preset;
-      const end = new Date();
-      let start = new Date();
-      if (preset === '7') start.setDate(end.getDate() - 6);
-      else if (preset === '30') start.setDate(end.getDate() - 29);
-      else if (preset === 'month') start = new Date(end.getFullYear(), end.getMonth(), 1);
-      startInput.value = dateInputValue(start);
-      endInput.value = dateInputValue(end);
-      runStats(startInput.value, endInput.value, resultsEl);
-    });
-  });
-
-  // Show the default range right away.
-  runStats(startInput.value, endInput.value, resultsEl);
-}
-
-async function runStats(startStr, endStr, resultsEl) {
-  if (!startStr || !endStr) return;
-  // Treat the range as local midnight-to-midnight, inclusive of the end day.
-  const start = new Date(startStr + 'T00:00:00').getTime();
-  const end = new Date(endStr + 'T23:59:59.999').getTime();
-
-  resultsEl.innerHTML = `<p class="empty-state">Loading…</p>`;
+async function runAnalyse() {
+  analyse = null; $('#resultat').innerHTML = ''; $('#genErr').textContent = '';
+  renderFiles();
+  if (!files.length) { $('#step2').hidden = $('#step3').hidden = true; return; }
   try {
-    const data = await adminApi(`/admin/stats?start=${start}&end=${end}`, { method: 'GET' });
-    if (data.stats.length === 0) {
-      resultsEl.innerHTML = `<p class="empty-state">No shifts in this range.</p>`;
-      return;
-    }
-    resultsEl.innerHTML = `
-      <table class="timesheet">
-        <thead>
-          <tr><th>Employee</th><th>Shifts</th><th>Total hours</th></tr>
-        </thead>
-        <tbody>
-          ${data.stats.map(s => `
-            <tr>
-              <td>${escapeHtml(s.name)}</td>
-              <td>${s.shiftCount}</td>
-              <td>${formatDuration(s.totalMs)}</td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-    `;
-  } catch (e) {
-    resultsEl.innerHTML = '';
-    showError(e.message);
+    analyse = await api('/api/analyse', { body: { files } });
+  } catch (err) {
+    $('#step2').hidden = true; $('#step3').hidden = false; $('#generer').disabled = true;
+    $('#genErr').textContent = err.message; return;
   }
+  renderFiles();
+  const harOG = !!analyse.filer.og;
+  $('#step2').hidden = false; $('#step3').hidden = false; $('#generer').disabled = false;
+
+  const d = $('#dato');
+  d.disabled = !harOG;
+  if (analyse.datoer.length === 1) { d.value = toIso(analyse.datoer[0]); $('#datoHint').textContent = `Hentet fra ${analyse.filer.wopla ? 'Wopla' : 'Frokostfirmaet'}-filen.`; }
+  else if (analyse.datoer.length > 1) { $('#datoHint').textContent = 'Filerne indeholder flere datoer: ' + analyse.datoer.join(', ') + '. Vælg datoen for OG.'; }
+  else { $('#datoHint').textContent = harOG ? 'OG-filen har ingen dato. Vælg leveringsdato.' : ''; }
+  if (!harOG) $('#datoHint').textContent = 'Ingen OG-fil uploadet.';
+
+  const nye = [...analyse.nye.Kunde.map(n => ['Kunde', n]), ...analyse.nye.Produkt.map(n => ['Produkt', n])];
+  if (!harOG) { $('#nyeWrap').innerHTML = ''; return; }
+  if (!nye.length) { $('#nyeWrap').innerHTML = '<div class="ok">Alle OG-kunder og -produkter har allerede faste ID\'er.</div>'; return; }
+  const opts = t => '<option value="">Nyt ID</option>' + analyse.eksisterende[t]
+    .map(x => `<option value="${x.id}">Samme som: ${esc(x.navn)} (${x.id})</option>`).join('');
+  $('#nyeWrap').innerHTML = `<div class="notice"><h3>${nye.length === 1 ? '1 nyt navn' : nye.length + ' nye navne'} i OG-filen</h3>
+    <p class="small">Er det en ny kunde eller et nyt produkt, så behold "Nyt ID". Er det et gammelt navn, OG har stavet anderledes, så vælg det eksisterende, så Piranya bevarer relationen.</p>
+    ${nye.map(([t, n], i) => `<div class="map"><span><span class="tag">${t}</span> ${esc(n)}</span>
+      <select data-type="${t}" data-navn="${esc(n)}">${opts(t)}</select></div>`).join('')}</div>`;
 }
 
-async function addEmployee() {
-  const nameInput = document.getElementById('new-emp-name');
-  const passwordInput = document.getElementById('new-emp-password');
-  const name = nameInput.value.trim();
-  const password = passwordInput.value.trim();
-  if (!name || !password) {
-    showError('Enter both a name and a password.');
-    return;
-  }
+// ---------- Generer ----------
+$('#generer').onclick = async () => {
+  $('#genErr').textContent = ''; $('#resultat').innerHTML = '';
+  const mappings = [...document.querySelectorAll('#nyeWrap select')]
+    .map(s => ({ type: s.dataset.type, navn: s.dataset.navn, id: s.value ? Number(s.value) : null }));
+  const btn = $('#generer'); btn.disabled = true;
   try {
-    await adminApi('/employees', { method: 'POST', body: JSON.stringify({ name, password }) });
-    nameInput.value = '';
-    passwordInput.value = '';
-    await refresh();
-  } catch (e) {
-    showError(e.message);
+    const r = await api('/api/generer', { body: { files, dato: fromIso($('#dato').value), mappings } });
+    const blob = new Blob([r.csv], { type: 'text/csv;charset=utf-8' });
+    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: r.filnavn });
+    document.body.appendChild(a); a.click(); a.remove();
+    const kilder = Object.entries(r.pr_kilde).map(([k, n]) => `${n} ${KILDE[k]}`).join(', ');
+    $('#resultat').innerHTML = `<div class="ok"><strong>${esc(r.filnavn)}</strong> er hentet.<br>
+      ${r.kunder} kunder (${kilder}) og ${r.produkter} produkter.
+      ${r.nye.length ? `<br><br>Nye ID'er gemt:<br>${r.nye.map(x => `${x.type} ${x.id}: ${esc(x.navn)}${x.koblet ? ' (koblet til eksisterende)' : ''}`).join('<br>')}` : ''}
+      <br><br><a href="#" id="igen">Hent filen igen</a></div>`;
+    $('#igen').onclick = e => { e.preventDefault(); a.click(); };
+    await runAnalyseQuiet();
+  } catch (err) { $('#genErr').textContent = err.message; }
+  btn.disabled = false;
+};
+// Opdater listen over nye navne efter de er gemt, uden at fjerne resultatet
+async function runAnalyseQuiet() {
+  const keep = $('#resultat').innerHTML;
+  await runAnalyse();
+  $('#resultat').innerHTML = keep;
+}
+
+// ---------- Register ----------
+let regRows = [];
+async function loadRegister() {
+  try { regRows = await api('/api/register'); renderRegister(); } catch (e) {}
+}
+function renderRegister() {
+  const q = $('#regSearch').value.trim().toLowerCase();
+  for (const t of ['Kunde', 'Produkt']) {
+    const byId = new Map();
+    regRows.filter(r => r.type === t).forEach(r => { if (!byId.has(r.id)) byId.set(r.id, []); byId.get(r.id).push(r.navn); });
+    const rows = [...byId].filter(([id, names]) => !q || String(id).includes(q) || names.some(n => n.toLowerCase().includes(q)));
+    $('#reg' + t).innerHTML = '<tr><th>ID</th><th>Navn</th></tr>' + rows.map(([id, names]) =>
+      `<tr><td class="id">${id}</td><td>${names.map((n, i) => `<div>${i ? '<span class="alias">også: </span>' : ''}${esc(n)}
+        <button class="link small" data-type="${t}" data-navn="${esc(n)}">flyt</button></div>`).join('')}</td></tr>`).join('');
   }
+  document.querySelectorAll('#register button[data-navn]').forEach(b => b.onclick = async () => {
+    const id = prompt(`Hvilket eksisterende ${b.dataset.type.toLowerCase()}-ID skal "${b.dataset.navn}" pege på?\n\nBrug kun dette til at rette en fejlkobling. Piranya kender navnet under det ID, det har nu.`);
+    if (!id) return;
+    try { await api('/api/register/flyt', { body: { type: b.dataset.type, navn: b.dataset.navn, id: Number(id) } }); loadRegister(); }
+    catch (e) { alert(e.message); }
+  });
 }
+$('#regSearch').oninput = renderRegister;
 
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
+// ---------- Indstillinger ----------
+async function loadSettings() {
+  try {
+    const s = await api('/api/settings');
+    for (const k of ['ogCaterId', 'ogCaterName', 'ffCaterName']) $('#' + k).value = s[k];
+    const log = await api('/api/log');
+    $('#logTable').innerHTML = '<tr><th>Kørt</th><th>Leveringsdato</th><th>Kilder</th><th>Kunder</th><th>Produkter</th><th>Nye ID\'er</th></tr>' +
+      log.map(l => `<tr><td>${new Date(l.koert).toLocaleString('da-DK')}</td><td>${esc(l.dato)}</td><td>${esc(l.kilder)}</td><td>${l.kunder}</td><td>${l.produkter}</td><td>${l.nye_ider}</td></tr>`).join('');
+  } catch (e) {}
 }
+$('#setForm').onsubmit = async e => {
+  e.preventDefault();
+  try {
+    await api('/api/settings', { method: 'PUT', body: Object.fromEntries(['ogCaterId', 'ogCaterName', 'ffCaterName'].map(k => [k, $('#' + k).value])) });
+    $('#setMsg').textContent = 'Gemt.';
+  } catch (err) { $('#setMsg').textContent = err.message; }
+};
 
-refresh().catch(e => showError(e.message));
-setInterval(() => refresh().catch(() => {}), 15000); // keep clocked-in durations and team state fresh
+// ---------- Start ----------
+api('/api/me').then(r => r.loggedIn ? showView('samling') : showLogin()).catch(showLogin);

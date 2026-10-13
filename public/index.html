@@ -1,39 +1,106 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html lang="da">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Gastro by Bøgh — Time tracker</title>
-  <link rel="icon" href="logo.png" />
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Playfair+Display:wght@600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css" />
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gastrotid · Ordresamler</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div class="wrap">
-    <header>
-      <div class="brand">
-        <img src="logo.png" alt="Gastro by Bøgh" />
-        <div class="brand-text">
-          <h1>Gastro by Bøgh</h1>
-          <p>Time tracker</p>
-        </div>
-      </div>
-      <nav>
-        <button id="tab-clock" class="tab active">Clock in / out</button>
-        <button id="tab-admin" class="tab">Admin</button>
-      </nav>
-    </header>
 
-    <main>
-      <section id="view-clock"></section>
-      <section id="view-admin" class="hidden"></section>
-    </main>
-
-    <p id="status" class="status"></p>
+<header>
+  <div class="brand">
+    <img src="logo.png" alt="Gastro by Bøgh" class="logo">
+    <h1>Gastrotid</h1>
+    <span>Ordresamler til Piranya</span>
   </div>
+  <nav id="nav" hidden>
+    <button class="tab active" data-view="samling">Samling</button>
+    <button class="tab" data-view="register">ID-register</button>
+    <button class="tab" data-view="indstillinger">Indstillinger</button>
+    <button id="logout" class="link">Log ud</button>
+  </nav>
+</header>
 
-  <script src="app.js"></script>
+<main>
+  <!-- Login -->
+  <section id="login" class="card narrow" hidden>
+    <h2>Log ind</h2>
+    <form id="loginForm">
+      <label>Adgangskode<input type="password" id="pw" autocomplete="current-password" required></label>
+      <button class="primary" type="submit">Log ind</button>
+      <p class="error" id="loginErr"></p>
+    </form>
+  </section>
+
+  <!-- Samling -->
+  <section id="samling" class="view" hidden>
+    <div class="card">
+      <h2>1. Upload dagens filer</h2>
+      <p class="muted">Træk Wopla-, Frokostfirmaet- og OG-filen ind på én gang. Filtypen genkendes automatisk.</p>
+      <label id="drop" class="drop">
+        <input type="file" id="fileInput" accept=".csv,text/csv" multiple hidden>
+        <strong>Slip CSV-filer her</strong><span>eller klik for at vælge</span>
+      </label>
+      <ul id="fileList" class="files"></ul>
+    </div>
+
+    <div class="card" id="step2" hidden>
+      <h2>2. Kontroller</h2>
+      <div class="row">
+        <label class="date">Leveringsdato for OG
+          <input type="date" id="dato">
+        </label>
+        <p class="muted small" id="datoHint"></p>
+      </div>
+      <div id="nyeWrap"></div>
+    </div>
+
+    <div class="card" id="step3" hidden>
+      <h2>3. Lav samlet fil</h2>
+      <button class="primary" id="generer">Lav og hent samlet CSV</button>
+      <p class="error" id="genErr"></p>
+      <div id="resultat"></div>
+    </div>
+  </section>
+
+  <!-- Register -->
+  <section id="register" class="view" hidden>
+    <div class="card">
+      <div class="head">
+        <h2>Faste OG-ID'er</h2>
+        <a class="button" href="/api/register.csv">Hent som CSV</a>
+      </div>
+      <p class="muted">Disse ID'er sendes til Piranya hver dag. Et ID må aldrig genbruges til noget andet. Har OG ændret et navn, kan det nye navn peges på det gamle ID.</p>
+      <input type="search" id="regSearch" placeholder="Søg i navne eller ID">
+      <div class="cols">
+        <div><h3>Kunder</h3><table id="regKunde"></table></div>
+        <div><h3>Produkter</h3><table id="regProdukt"></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Indstillinger -->
+  <section id="indstillinger" class="view" hidden>
+    <div class="card narrow">
+      <h2>Faste værdier i filen</h2>
+      <form id="setForm">
+        <label>CaterId for OG<input id="ogCaterId" required></label>
+        <label>CaterName for OG<input id="ogCaterName" required></label>
+        <label>CaterName for Frokostfirmaet<input id="ffCaterName" required></label>
+        <button class="primary" type="submit">Gem</button>
+        <p class="muted small" id="setMsg"></p>
+      </form>
+    </div>
+    <div class="card">
+      <h2>Seneste kørsler</h2>
+      <table id="logTable"></table>
+    </div>
+  </section>
+</main>
+
+<script src="app.js"></script>
 </body>
 </html>

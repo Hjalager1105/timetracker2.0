@@ -1,315 +1,287 @@
+'use strict';
 const express = require('express');
-const path = require('path');
 const crypto = require('crypto');
+const path = require('path');
 const { Pool } = require('pg');
+const M = require('./lib/merge');
 
 const PORT = process.env.PORT || 3000;
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+const SECRET = process.env.SESSION_SECRET || ADMIN_PASSWORD || '';
+if (!ADMIN_PASSWORD) console.warn('ADVARSEL: ADMIN_PASSWORD er ikke sat — ingen kan logge ind.');
 
-// Set this in Railway → Variables → ADMIN_PASSWORD. Falls back to a default
-// so the app still runs locally, but change it before real use.
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'changeme';
-
-if (!process.env.DATABASE_URL) {
-  console.error('DATABASE_URL is not set. Add a Postgres database in Railway and connect it — see README.md.');
-  process.exit(1);
-}
-
+const dbUrl = process.env.DATABASE_URL || '';
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  // Railway's internal Postgres connection doesn't need SSL; its public
-  // connection string does. This works for both.
-  ssl: process.env.DATABASE_URL.includes('railway.internal') ? false : { rejectUnauthorized: false },
+  connectionString: dbUrl,
+  ssl: !dbUrl || /localhost|127\.0\.0\.1|\.railway\.internal/.test(dbUrl) ? false : { rejectUnauthorized: false }
 });
 
+const START = { Kunde: 910001, Produkt: 920001 };
+const DEFAULT_SETTINGS = { ogCaterId: '9000', ogCaterName: 'OG', ffCaterName: 'Frokostfirmaet' };
+
+// ---------- Database ----------
 async function initDb() {
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS employees (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      password_salt TEXT NOT NULL,
-      password_hash TEXT NOT NULL
+    CREATE TABLE IF NOT EXISTS og_id_register (
+      type     TEXT NOT NULL CHECK (type IN ('Kunde','Produkt')),
+      norm     TEXT NOT NULL,
+      navn     TEXT NOT NULL,
+      id       INTEGER NOT NULL,
+      oprettet TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (type, norm)
     );
-  `);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS entries (
-      id TEXT PRIMARY KEY,
-      employee_id TEXT NOT NULL,
-      clock_in BIGINT NOT NULL,
-      clock_out BIGINT
-    );
-  `);
-  await pool.query(`CREATE INDEX IF NOT EXISTS entries_employee_id_idx ON entries(employee_id);`);
-}
-
-function uid() {
-  return crypto.randomBytes(6).toString('hex');
-}
-
-// --- password hashing --------------------------------------------------
-
-function hashPassword(password) {
-  const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
-  return { salt, hash };
-}
-
-function verifyPassword(password, salt, hash) {
-  if (!password || !salt || !hash) return false;
-  const attempt = crypto.scryptSync(password, salt, 64).toString('hex');
-  const a = Buffer.from(attempt, 'hex');
-  const b = Buffer.from(hash, 'hex');
-  if (a.length !== b.length) return false;
-  return crypto.timingSafeEqual(a, b);
-}
-
-function timingSafeStringEqual(a, b) {
-  const bufA = Buffer.from(String(a));
-  const bufB = Buffer.from(String(b));
-  if (bufA.length !== bufB.length) return false;
-  return crypto.timingSafeEqual(bufA, bufB);
-}
-
-// --- admin auth middleware ----------------------------------------------
-
-function requireAdmin(req, res, next) {
-  const provided = req.get('x-admin-password') || '';
-  if (!timingSafeStringEqual(provided, ADMIN_PASSWORD)) {
-    return res.status(401).json({ error: 'Incorrect admin password.' });
+    CREATE TABLE IF NOT EXISTS ordre_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS ordre_log (
+      id SERIAL PRIMARY KEY, koert TIMESTAMPTZ NOT NULL DEFAULT now(),
+      dato TEXT, kilder TEXT, kunder INTEGER, produkter INTEGER, nye_ider INTEGER
+    );`);
+  const { rows } = await pool.query('SELECT count(*)::int AS n FROM og_id_register');
+  if (rows[0].n === 0) {
+    const seed = require('./db/og_register_seed.json');
+    for (const s of seed) {
+      await pool.query('INSERT INTO og_id_register (type, norm, navn, id) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING',
+        [s.type, M.norm(s.navn), s.navn, s.id]);
+    }
+    console.log(`ID-register oprettet med ${seed.length} faste OG-ID'er.`);
   }
-  next();
 }
 
-// --- app -------------------------------------------------------------------
+async function getSettings(db = pool) {
+  const { rows } = await db.query('SELECT key, value FROM ordre_settings');
+  const s = { ...DEFAULT_SETTINGS };
+  for (const r of rows) if (r.key in s) s[r.key] = r.value;
+  return s;
+}
 
+async function loadRegister(db = pool) {
+  const { rows } = await db.query('SELECT type, norm, navn, id FROM og_id_register');
+  const reg = { Kunde: new Map(), Produkt: new Map() };
+  for (const r of rows) reg[r.type].set(r.norm, { id: r.id, navn: r.navn });
+  return reg;
+}
+
+// ---------- Login ----------
+function sign(v) { return crypto.createHmac('sha256', SECRET).update(v).digest('hex'); }
+function makeToken() { const exp = String(Date.now() + 12 * 3600 * 1000); return exp + '.' + sign(exp); }
+function validToken(t) {
+  if (!t || !SECRET) return false;
+  const [exp, sig] = t.split('.');
+  if (!exp || !sig || Number(exp) < Date.now()) return false;
+  const a = Buffer.from(sig), b = Buffer.from(sign(exp));
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+function cookies(req) {
+  const out = {};
+  (req.headers.cookie || '').split(';').forEach(p => {
+    const i = p.indexOf('=');
+    if (i > 0) out[p.slice(0, i).trim()] = decodeURIComponent(p.slice(i + 1).trim());
+  });
+  return out;
+}
+function requireAuth(req, res, next) {
+  if (validToken(cookies(req).gt)) return next();
+  res.status(401).json({ error: 'Log ind igen.' });
+}
+
+// ---------- Fletning ----------
+function readFiles(files) {
+  const found = {}, ukendte = [];
+  for (const f of files || []) {
+    const rows = M.parseCSV(f.text);
+    const type = M.detect(rows);
+    if (!type) { ukendte.push(f.name); continue; }
+    if (found[type]) throw httpErr(`Der er uploadet to ${M.KILDE_NAVN[type]}-filer (${found[type].name} og ${f.name}).`);
+    found[type] = { name: f.name, rows };
+  }
+  if (ukendte.length) throw httpErr('Filen kunne ikke genkendes som Wopla, Frokostfirmaet eller OG: ' + ukendte.join(', '));
+  if (!Object.keys(found).length) throw httpErr('Upload mindst én fil.');
+  return found;
+}
+
+function httpErr(msg) { const e = new Error(msg); e.status = 400; return e; }
+
+// dd.mm.åååå fra Wopla/Frokostfirmaet, så OG får samme leveringsdato
+function datesIn(found) {
+  const d = new Set();
+  if (found.wopla) found.wopla.rows.slice(1).forEach(r => d.add(r[0].trim()));
+  if (found.frokostfirmaet) {
+    const i = found.frokostfirmaet.rows[0].map(s => s.trim()).indexOf('OrdreDato');
+    found.frokostfirmaet.rows.slice(1).forEach(r => d.add(r[i].trim()));
+  }
+  return [...d].filter(Boolean);
+}
+
+function unknownNames(found, reg) {
+  const out = { Kunde: [], Produkt: [] };
+  if (!found.og) return out;
+  const names = M.ogNames(found.og.rows);
+  for (const t of ['Kunde', 'Produkt']) {
+    const seen = new Set();
+    for (const n of names[t]) {
+      const k = M.norm(n);
+      if (!reg[t].has(k) && !seen.has(k)) { seen.add(k); out[t].push(n); }
+    }
+  }
+  return out;
+}
+
+function summary(found) {
+  const s = {};
+  for (const [t, f] of Object.entries(found)) s[t] = { fil: f.name, linjer: f.rows.length - 1 };
+  return s;
+}
+
+// ---------- App ----------
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '25mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-app.post('/api/admin/verify', (req, res) => {
-  const { password } = req.body;
-  if (!timingSafeStringEqual(password || '', ADMIN_PASSWORD)) {
-    return res.status(401).json({ error: 'Incorrect admin password.' });
-  }
+app.post('/api/login', (req, res) => {
+  const pw = String((req.body && req.body.password) || '');
+  const ok = ADMIN_PASSWORD && pw.length === ADMIN_PASSWORD.length &&
+    crypto.timingSafeEqual(Buffer.from(pw), Buffer.from(ADMIN_PASSWORD));
+  if (!ok) return res.status(401).json({ error: 'Forkert adgangskode.' });
+  const secure = req.secure || req.headers['x-forwarded-proto'] === 'https';
+  res.setHeader('Set-Cookie', `gt=${makeToken()}; HttpOnly; Path=/; SameSite=Lax; Max-Age=43200${secure ? '; Secure' : ''}`);
   res.json({ ok: true });
 });
-
-// Get everything the frontend needs in one call.
-// Employee password hashes never leave the server.
-app.get('/api/state', async (req, res) => {
-  try {
-    const employeesResult = await pool.query('SELECT id, name FROM employees ORDER BY name ASC');
-    const entriesResult = await pool.query('SELECT id, employee_id, clock_in, clock_out FROM entries ORDER BY clock_in DESC');
-    res.json({
-      employees: employeesResult.rows,
-      entries: entriesResult.rows.map(rowToEntry),
-    });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Database error.' });
-  }
+app.post('/api/logout', (req, res) => {
+  res.setHeader('Set-Cookie', 'gt=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0');
+  res.json({ ok: true });
 });
+app.get('/api/me', (req, res) => res.json({ loggedIn: validToken(cookies(req).gt) }));
 
-function rowToEntry(row) {
-  return {
-    id: row.id,
-    employeeId: row.employee_id,
-    clockIn: Number(row.clock_in),
-    clockOut: row.clock_out === null ? null : Number(row.clock_out),
-  };
-}
-
-// Add an employee — admin only, sets the employee's clock-in password
-app.post('/api/employees', requireAdmin, async (req, res) => {
-  const name = (req.body.name || '').trim();
-  const password = (req.body.password || '').trim();
-  if (!name) return res.status(400).json({ error: 'Name is required.' });
-  if (!password) return res.status(400).json({ error: 'A password for this employee is required.' });
-
+// Trin 1: læs filerne og find nye OG-navne, uden at gemme noget
+app.post('/api/analyse', requireAuth, async (req, res, next) => {
   try {
-    const { salt, hash } = hashPassword(password);
-    const id = uid();
-    await pool.query(
-      'INSERT INTO employees (id, name, password_salt, password_hash) VALUES ($1, $2, $3, $4)',
-      [id, name, salt, hash]
-    );
-    res.json({ id, name });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Database error.' });
-  }
-});
-
-// Remove an employee (keeps their past entries for the record) — admin only
-app.delete('/api/employees/:id', requireAdmin, async (req, res) => {
-  try {
-    await pool.query('DELETE FROM employees WHERE id = $1', [req.params.id]);
-    res.json({ ok: true });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Database error.' });
-  }
-});
-
-// Reset an employee's password — admin only
-app.post('/api/employees/:id/password', requireAdmin, async (req, res) => {
-  const password = (req.body.password || '').trim();
-  if (!password) return res.status(400).json({ error: 'A new password is required.' });
-
-  try {
-    const { salt, hash } = hashPassword(password);
-    const result = await pool.query(
-      'UPDATE employees SET password_salt = $1, password_hash = $2 WHERE id = $3',
-      [salt, hash, req.params.id]
-    );
-    if (result.rowCount === 0) return res.status(404).json({ error: 'Employee not found.' });
-    res.json({ ok: true });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Database error.' });
-  }
-});
-
-// Clock in — requires the employee's own password
-app.post('/api/entries/clock-in', async (req, res) => {
-  const { employeeId, password } = req.body;
-  try {
-    const empResult = await pool.query('SELECT * FROM employees WHERE id = $1', [employeeId]);
-    const employee = empResult.rows[0];
-    if (!employee) return res.status(404).json({ error: 'Employee not found.' });
-    if (!verifyPassword(password, employee.password_salt, employee.password_hash)) {
-      return res.status(401).json({ error: 'Incorrect password.' });
+    const found = readFiles(req.body.files);
+    const reg = await loadRegister();
+    const ids = { Kunde: [], Produkt: [] };
+    for (const t of ['Kunde', 'Produkt']) {
+      const byId = new Map();
+      for (const v of reg[t].values()) if (!byId.has(v.id)) byId.set(v.id, v.navn);
+      ids[t] = [...byId].map(([id, navn]) => ({ id, navn })).sort((a, b) => a.navn.localeCompare(b.navn, 'da'));
     }
-
-    const activeResult = await pool.query(
-      'SELECT id FROM entries WHERE employee_id = $1 AND clock_out IS NULL',
-      [employeeId]
-    );
-    if (activeResult.rows.length > 0) return res.status(400).json({ error: 'Already clocked in.' });
-
-    const id = uid();
-    const clockIn = Date.now();
-    await pool.query(
-      'INSERT INTO entries (id, employee_id, clock_in, clock_out) VALUES ($1, $2, $3, NULL)',
-      [id, employeeId, clockIn]
-    );
-    res.json({ id, employeeId, clockIn, clockOut: null });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Database error.' });
-  }
+    res.json({ filer: summary(found), datoer: datesIn(found), nye: unknownNames(found, reg), eksisterende: ids });
+  } catch (e) { next(e); }
 });
 
-// Clock out — requires the employee's own password
-app.post('/api/entries/clock-out', async (req, res) => {
-  const { employeeId, password } = req.body;
+// Trin 2: tildel ID'er til nye navne og byg den samlede fil
+app.post('/api/generer', requireAuth, async (req, res, next) => {
+  const client = await pool.connect();
   try {
-    const empResult = await pool.query('SELECT * FROM employees WHERE id = $1', [employeeId]);
-    const employee = empResult.rows[0];
-    if (!employee) return res.status(404).json({ error: 'Employee not found.' });
-    if (!verifyPassword(password, employee.password_salt, employee.password_hash)) {
-      return res.status(401).json({ error: 'Incorrect password.' });
+    const found = readFiles(req.body.files);
+    const datoer = datesIn(found);
+    let dato = String(req.body.dato || '').trim();
+    if (!dato) {
+      if (datoer.length === 1) dato = datoer[0];
+      else if (found.og) throw httpErr('Vælg leveringsdato for OG-bestillingerne.');
     }
+    if (dato && !/^\d{2}\.\d{2}\.\d{4}$/.test(dato)) throw httpErr('Datoen skal være på formen dd.mm.åååå.');
 
-    const activeResult = await pool.query(
-      'SELECT id FROM entries WHERE employee_id = $1 AND clock_out IS NULL',
-      [employeeId]
-    );
-    const active = activeResult.rows[0];
-    if (!active) return res.status(400).json({ error: 'Not currently clocked in.' });
+    await client.query('BEGIN');
+    await client.query('LOCK TABLE og_id_register IN EXCLUSIVE MODE');
+    const settings = await getSettings(client);
+    const reg = await loadRegister(client);
+    const mappings = Array.isArray(req.body.mappings) ? req.body.mappings : [];
+    const nye = [];
 
-    const clockOut = Date.now();
-    await pool.query('UPDATE entries SET clock_out = $1 WHERE id = $2', [clockOut, active.id]);
-    res.json({ ok: true, clockOut });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Database error.' });
-  }
-});
-
-// Manually edit an entry (admin correction) — admin only
-app.put('/api/entries/:id', requireAdmin, async (req, res) => {
-  const { clockIn, clockOut } = req.body;
-  try {
-    const result = await pool.query('SELECT * FROM entries WHERE id = $1', [req.params.id]);
-    if (result.rows.length === 0) return res.status(404).json({ error: 'Entry not found.' });
-
-    const newClockIn = clockIn ? Number(clockIn) : result.rows[0].clock_in;
-    const newClockOut = clockOut !== undefined ? (clockOut ? Number(clockOut) : null) : result.rows[0].clock_out;
-
-    await pool.query('UPDATE entries SET clock_in = $1, clock_out = $2 WHERE id = $3', [
-      newClockIn, newClockOut, req.params.id,
-    ]);
-    res.json({ ok: true });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Database error.' });
-  }
-});
-
-// Delete an entry — admin only
-app.delete('/api/entries/:id', requireAdmin, async (req, res) => {
-  try {
-    await pool.query('DELETE FROM entries WHERE id = $1', [req.params.id]);
-    res.json({ ok: true });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Database error.' });
-  }
-});
-
-// Statistics for a date range — admin only.
-// ?start=<ms>&end=<ms> as epoch milliseconds.
-app.get('/api/admin/stats', requireAdmin, async (req, res) => {
-  const start = Number(req.query.start);
-  const end = Number(req.query.end);
-  if (!Number.isFinite(start) || !Number.isFinite(end)) {
-    return res.status(400).json({ error: 'start and end query params (epoch ms) are required.' });
-  }
-
-  try {
-    // Entries that overlap the requested window at all.
-    const result = await pool.query(
-      `SELECT e.id, e.employee_id, e.clock_in, e.clock_out, emp.name
-       FROM entries e
-       LEFT JOIN employees emp ON emp.id = e.employee_id
-       WHERE e.clock_in <= $2 AND (e.clock_out IS NULL OR e.clock_out >= $1)`,
-      [start, end]
-    );
-
-    const now = Date.now();
-    const totals = {}; // employeeId -> { name, totalMs, shiftCount }
-
-    for (const row of result.rows) {
-      const clockIn = Number(row.clock_in);
-      const clockOut = row.clock_out === null ? now : Number(row.clock_out);
-      // Clip the shift to the requested window before summing.
-      const overlapStart = Math.max(clockIn, start);
-      const overlapEnd = Math.min(clockOut, end);
-      const overlapMs = Math.max(0, overlapEnd - overlapStart);
-
-      const key = row.employee_id;
-      if (!totals[key]) {
-        totals[key] = { employeeId: key, name: row.name || 'Removed employee', totalMs: 0, shiftCount: 0 };
+    const unknown = unknownNames(found, reg);
+    for (const t of ['Kunde', 'Produkt']) {
+      for (const navn of unknown[t]) {
+        const m = mappings.find(x => x.type === t && M.norm(x.navn) === M.norm(navn));
+        let id;
+        if (m && m.id) {
+          id = Number(m.id);
+          const exists = [...reg[t].values()].some(v => v.id === id);
+          if (!exists) throw httpErr(`${t}-ID ${m.id} findes ikke i registret.`);
+        } else {
+          const { rows } = await client.query('SELECT COALESCE(MAX(id), $2 - 1) + 1 AS id FROM og_id_register WHERE type = $1', [t, START[t]]);
+          id = rows[0].id;
+        }
+        await client.query('INSERT INTO og_id_register (type, norm, navn, id) VALUES ($1,$2,$3,$4)', [t, M.norm(navn), navn.trim(), id]);
+        reg[t].set(M.norm(navn), { id, navn: navn.trim() });
+        nye.push({ type: t, navn: navn.trim(), id, koblet: !!(m && m.id) });
       }
-      totals[key].totalMs += overlapMs;
-      totals[key].shiftCount += 1;
     }
 
-    const stats = Object.values(totals).sort((a, b) => a.name.localeCompare(b.name));
-    res.json({ stats });
+    const lookup = (t, n) => String(reg[t].get(M.norm(n)).id);
+    let orders = [];
+    if (found.wopla) orders = orders.concat(M.parseWopla(found.wopla.rows));
+    if (found.frokostfirmaet) orders = orders.concat(M.parseFrokostfirmaet(found.frokostfirmaet.rows, settings));
+    if (found.og) orders = orders.concat(M.parseOG(found.og.rows, dato, settings, lookup));
+    const { csv, produkter } = M.buildCSV(orders);
+
+    await client.query('INSERT INTO ordre_log (dato, kilder, kunder, produkter, nye_ider) VALUES ($1,$2,$3,$4,$5)',
+      [dato || datoer.join(','), Object.keys(found).map(k => M.KILDE_NAVN[k]).join(', '), orders.length, produkter, nye.length]);
+    await client.query('COMMIT');
+
+    const tal = {};
+    for (const o of orders) tal[o.kilde] = (tal[o.kilde] || 0) + 1;
+    const fil = 'Samlet_bestillinger_' + (dato || datoer[0] || 'ukendt').replace(/\./g, '-') + '.csv';
+    res.json({ csv, filnavn: fil, kunder: orders.length, produkter, pr_kilde: tal, nye });
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Database error.' });
-  }
+    await client.query('ROLLBACK').catch(() => {});
+    next(e);
+  } finally { client.release(); }
+});
+
+app.get('/api/register', requireAuth, async (req, res, next) => {
+  try {
+    const { rows } = await pool.query('SELECT type, navn, id, oprettet FROM og_id_register ORDER BY type, id, oprettet');
+    res.json(rows);
+  } catch (e) { next(e); }
+});
+
+// Peg et navn på et andet (eksisterende) ID, fx hvis OG har ændret stavemåde
+app.post('/api/register/flyt', requireAuth, async (req, res, next) => {
+  try {
+    const { type, navn, id } = req.body || {};
+    if (!['Kunde', 'Produkt'].includes(type)) throw httpErr('Ukendt type.');
+    const ex = await pool.query('SELECT 1 FROM og_id_register WHERE type=$1 AND id=$2 AND norm<>$3 LIMIT 1', [type, Number(id), M.norm(navn)]);
+    if (!ex.rowCount) throw httpErr(`Der er intet andet navn med ${type}-ID ${id}.`);
+    const r = await pool.query('UPDATE og_id_register SET id=$3 WHERE type=$1 AND norm=$2', [type, M.norm(navn), Number(id)]);
+    if (!r.rowCount) throw httpErr('Navnet findes ikke i registret.');
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+app.get('/api/register.csv', requireAuth, async (req, res, next) => {
+  try {
+    const { rows } = await pool.query('SELECT type, id, navn FROM og_id_register ORDER BY type, id, navn');
+    const body = '﻿Type;ID;Navn\r\n' + rows.map(r => [r.type, r.id, /[;"]/.test(r.navn) ? `"${r.navn.replace(/"/g, '""')}"` : r.navn].join(';')).join('\r\n') + '\r\n';
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="OG_ID_register.csv"');
+    res.send(body);
+  } catch (e) { next(e); }
+});
+
+app.get('/api/settings', requireAuth, async (req, res, next) => {
+  try { res.json(await getSettings()); } catch (e) { next(e); }
+});
+app.put('/api/settings', requireAuth, async (req, res, next) => {
+  try {
+    for (const k of Object.keys(DEFAULT_SETTINGS)) {
+      if (req.body && typeof req.body[k] === 'string' && req.body[k].trim()) {
+        await pool.query('INSERT INTO ordre_settings (key, value) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value', [k, req.body[k].trim()]);
+      }
+    }
+    res.json(await getSettings());
+  } catch (e) { next(e); }
+});
+
+app.get('/api/log', requireAuth, async (req, res, next) => {
+  try {
+    const { rows } = await pool.query('SELECT koert, dato, kilder, kunder, produkter, nye_ider FROM ordre_log ORDER BY koert DESC LIMIT 30');
+    res.json(rows);
+  } catch (e) { next(e); }
+});
+
+app.use((err, req, res, next) => {
+  if (!err.status) console.error(err);
+  res.status(err.status || 500).json({ error: err.status ? err.message : 'Serverfejl: ' + err.message });
 });
 
 initDb()
-  .then(() => {
-    app.listen(PORT, () => {
-      console.log(`Time tracker running at http://localhost:${PORT}`);
-    });
-  })
-  .catch((e) => {
-    console.error('Failed to initialize database:', e);
-    process.exit(1);
-  });
+  .then(() => app.listen(PORT, () => console.log('Gastrotid ordresamler kører på port ' + PORT)))
+  .catch(e => { console.error('Kunne ikke forbinde til databasen:', e.message); process.exit(1); });
